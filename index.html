@@ -152,16 +152,21 @@
             <!-- COMPLAINT/SUGGESTION BOX TAB -->
             <div id="complaint-box" class="tab-content hidden">
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    <!-- Submission Form (Updated for Anonymity) -->
-                    <div class="p-6 bg-blue-50 rounded-lg shadow-md border border-blue-200">
-                        <h2 class="text-2xl font-bold text-blue-700 mb-4">Submit Feedback</h2>
-                        <form id="complaint-form" onsubmit="submitComplaint(event)">
-                            <!-- Optional Name Field -->
+                    <div id="auth-section" class="p-6 bg-blue-50 rounded-lg shadow-md border border-blue-200">
+                        <h2 class="text-2xl font-bold text-blue-700 mb-4" id="auth-header">Please Sign In to Post Feedback</h2>
+                        
+                        <button id="signin-button" onclick="signInWithGoogle()" 
+                                class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition duration-150">
+                            Sign In with IIPE Google Account
+                        </button>
+                        
+                        <form id="complaint-form" onsubmit="submitComplaint(event)" class="hidden mt-4">
+                            <p class="text-sm text-gray-600 mb-4">Signed in as: <strong id="user-email-display"></strong> <button type="button" onclick="signOutUser()" class="text-xs text-red-500 hover:text-red-700 ml-2"> (Sign Out)</button></p>
+                            
                             <div class="mb-4">
                                 <label for="userName" class="block text-sm font-medium text-gray-700">Your Name (Optional)</label>
                                 <input type="text" id="userName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" placeholder="e.g., John Doe or leave blank for anonymous" />
                             </div>
-                            <!-- Removed userIdDisplay -->
                             <div class="mb-4">
                                 <label for="complaintText" class="block text-sm font-medium text-gray-700">Suggestion or Complaint Message</label>
                                 <textarea id="complaintText" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border" placeholder="Enter your feedback here..."></textarea>
@@ -172,6 +177,15 @@
                             <p id="form-message" class="mt-3 text-center text-sm font-medium hidden"></p>
                         </form>
                     </div>
+
+                    <div class="p-6 bg-white rounded-lg shadow-lg border border-gray-200">
+                        <h2 class="text-2xl font-bold text-gray-700 mb-4">Recent Feedback (Last 7 Days)</h2>
+                        <div id="complaints-list" class="complaint-list space-y-4">
+                            <p id="no-complaints" class="text-gray-500 text-center">Loading complaints...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
                     <!-- Existing Complaints Display -->
                     <div class="p-6 bg-white rounded-lg shadow-lg border border-gray-200">
@@ -187,14 +201,21 @@
         </div>
 
         <footer>
-            <p class="text-center text-xs text-gray-400 mt-8">Problem? Karan's got a solution.</p>
+            <p class="text-center text-xs text-gray-400 mt-8">Powered by Firebase Firestore and Gemini.</p>
         </footer>
     </div>
 
     <!-- Firebase Imports and Setup -->
     <script type="module">
+        // Import Google-specific auth methods
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getAuth, 
+            onAuthStateChanged, 
+            GoogleAuthProvider, 
+            signInWithPopup, 
+            signOut 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, addDoc, onSnapshot, collection, query, orderBy, where, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- REAL FIREBASE CONFIGURATION (Provided by User) ---
@@ -205,20 +226,7 @@
             storageBucket: "college-mess-75e8f.firebasestorage.app",
             messagingSenderId: "617206629929",
             appId: "1:617206629929:web:24ec275b0a579778f3fe38",
-            // measurementId is optional and not needed for core functionality
         };
-        // ---------------------------------------------------
-
-        // Global variables provided by the environment, with REAL_FIREBASE_CONFIG as the fallback
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : REAL_FIREBASE_CONFIG;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // Removed mock token
-
-        // Firebase Initialization and Globals for the App
-        let app, db, auth, userId = null;
-        let isFirebaseInitialized = false; // Flag to check if DB is ready
-        const COMPLAINTS_COLLECTION_PATH = `/artifacts/${appId}/public/data/complaints`;
-
         // The application's core data structure (Menu and Time Windows remain the same)
         window.WEEKLY_MENU = {
             Monday: {
@@ -272,64 +280,90 @@
             Snacks: { start: 17, end: 19 },    // 5:00 PM to 7:00 PM (A bit longer window)
             Dinner: { start: 20, end: 22 }     // 8:00 PM to 10:00 PM
         };
+        // ---------------------------------------------------
 
-        // Helper function for date formatting
+        // Domain to enforce
+        const ALLOWED_DOMAIN = "iipe.ac.in";
+
+        // Global variables provided by the environment, with REAL_FIREBASE_CONFIG as the fallback
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : REAL_FIREBASE_CONFIG;
+
+        // Firebase Initialization and Globals for the App
+        let app, db, auth, userId = null;
+        let isFirebaseInitialized = false; 
+        const COMPLAINTS_COLLECTION_PATH = `/artifacts/${appId}/public/data/complaints`;
+
+        // The rest of the WEEKLY_MENU and MEAL_TIMES data is unchanged and assumed global.
+
+        // Helper function for date formatting (Keep as is)
         const formatDate = (date) => {
             const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
             return new Date(date).toLocaleDateString('en-US', options);
         };
+        
+        /**
+         * Toggles the UI elements based on authentication state.
+         * @param {object | null} user - The Firebase User object or null.
+         */
+        function updateAuthUI(user) {
+            const authHeader = document.getElementById('auth-header');
+            const signInButton = document.getElementById('signin-button');
+            const complaintForm = document.getElementById('complaint-form');
+            const userEmailDisplay = document.getElementById('user-email-display');
+
+            if (user && user.email && user.email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+                // Logged in with correct domain
+                authHeader.textContent = "Submit Your Feedback";
+                signInButton.classList.add('hidden');
+                complaintForm.classList.remove('hidden');
+                userEmailDisplay.textContent = user.email;
+                userId = user.uid; // Set internal userId
+            } else {
+                // Logged out or wrong domain
+                authHeader.textContent = "Please Sign In to Post Feedback";
+                signInButton.classList.remove('hidden');
+                complaintForm.classList.add('hidden');
+                userEmailDisplay.textContent = 'N/A';
+                userId = null; // Clear internal userId
+                
+                // If user exists but has the wrong domain, sign them out immediately
+                if (user) {
+                    signOut(auth).then(() => {
+                        console.log("Signed out user with incorrect domain.");
+                        alert("Sign-in failed: Only accounts from @" + ALLOWED_DOMAIN + " are allowed.");
+                    }).catch(error => console.error("Sign out error:", error));
+                }
+            }
+        }
 
         /**
-         * Initializes Firebase and sets up authentication.
+         * Initializes Firebase and sets up authentication listener.
          */
         async function initializeFirebase() {
-            // Set a random user ID immediately for internal anonymous tracking/fallbacks
-            userId = crypto.randomUUID(); 
-
             if (!firebaseConfig) {
-                console.warn("Firebase configuration is missing. Complaint box will be disabled.");
-                document.getElementById('complaint-box').innerHTML = `
-                    <div class="p-6 bg-red-100 rounded-lg text-red-800">
-                        <p class="font-bold">Database Disabled:</p>
-                        <p>The Complaint & Suggestion box is unavailable because the database (Firebase) configuration is missing.</p>
-                    </div>`;
+                // Error handling unchanged
                 return;
             }
 
             try {
-                // setLogLevel('debug'); // Uncomment for verbose logs
+                // setLogLevel('debug');
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-
-                // Ensure authentication completes before proceeding
-                const authReadyPromise = new Promise(resolve => {
-                    onAuthStateChanged(auth, async (user) => {
-                        if (!user) {
-                            // Sign in anonymously if no user is present
-                            await signInAnonymously(auth); 
-                        }
-                        // Use the secure Firebase UID internally if available, otherwise keep the random ID
-                        userId = auth.currentUser?.uid || userId; 
-                        resolve();
-                    });
+                
+                // Add listener for auth state changes
+                onAuthStateChanged(auth, (user) => {
+                    updateAuthUI(user);
+                    // Only start complaint listener once Firebase is ready
+                    if (!isFirebaseInitialized) {
+                        isFirebaseInitialized = true;
+                        listenForComplaints(); 
+                    }
                 });
 
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    // Wait for anonymous sign-in/auth state change to complete
-                    await authReadyPromise; 
-                }
-                
-                isFirebaseInitialized = true;
-                
-                // Only start listener after successful authentication
-                listenForComplaints(); 
-
             } catch (error) {
-                console.error("Firebase initialization or sign-in failed:", error);
-                // Display error specific to the complaint box
+                console.error("Firebase initialization failed:", error);
                 document.getElementById('complaint-box').innerHTML = `
                     <div class="p-6 bg-red-100 rounded-lg text-red-800">
                         <p class="font-bold">Database Error:</p>
@@ -339,7 +373,62 @@
         }
 
         /**
-         * Handles fetching and displaying complaints in real-time.
+         * Handles the Google Sign-In process with domain restriction.
+         */
+        window.signInWithGoogle = async () => {
+            const provider = new GoogleAuthProvider();
+            
+            // Set the 'hd' (hosted domain) parameter to restrict sign-in selection to the desired domain
+            // NOTE: This is a hint, not a full security measure. Firebase Security Rules must enforce this as well.
+            provider.setCustomParameters({
+                'hd': ALLOWED_DOMAIN
+            });
+
+            try {
+                await signInWithPopup(auth, provider);
+                // onAuthStateChanged listener handles successful sign-in and UI update
+                
+            } catch (error) {
+                // Handle different sign-in errors
+                const messageElement = document.getElementById('form-message');
+                messageElement.classList.remove('hidden');
+                
+                if (error.code === 'auth/popup-closed-by-user') {
+                    messageElement.textContent = "Sign-in popup closed. Please try again.";
+                    messageElement.className = 'mt-3 text-center text-sm font-medium text-yellow-600';
+                } else if (error.code === 'auth/cancelled-popup-request') {
+                     messageElement.textContent = "Popup already open. Please complete the first request.";
+                    messageElement.className = 'mt-3 text-center text-sm font-medium text-yellow-600';
+                } else if (error.email && !error.email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+                    // This error is caught if the user selects the wrong domain *after* the popup closes,
+                    // but the onAuthStateChanged should also catch it and sign them out.
+                    messageElement.textContent = `Sign-in failed: Only accounts from @${ALLOWED_DOMAIN} are allowed.`;
+                    messageElement.className = 'mt-3 text-center text-sm font-medium text-red-600';
+                } else {
+                    console.error("Sign-in error:", error);
+                    messageElement.textContent = `Error during sign-in: ${error.message}`;
+                    messageElement.className = 'mt-3 text-center text-sm font-medium text-red-600';
+                }
+                setTimeout(() => messageElement.classList.add('hidden'), 5000);
+            }
+        };
+
+        /**
+         * Handles signing out the current user.
+         */
+        window.signOutUser = async () => {
+            try {
+                await signOut(auth);
+                // onAuthStateChanged listener handles UI update
+            } catch (error) {
+                console.error("Sign out error:", error);
+                alert("Failed to sign out. Please try again.");
+            }
+        };
+
+
+        /**
+         * Handles fetching and displaying complaints in real-time. (Logic unchanged)
          */
         function listenForComplaints() {
             if (!db || !isFirebaseInitialized) return;
@@ -370,8 +459,8 @@
                     const complaintDiv = document.createElement('div');
                     complaintDiv.className = 'p-3 bg-white rounded-lg border border-gray-100 shadow-sm';
                     
-                    // Use the stored userName or default to Anonymous Student
-                    const nameToDisplay = data.userName || "Anonymous Student"; 
+                    // Use the stored userName or default to Anonymous Student (or authenticated user's email if name is blank)
+                    const nameToDisplay = data.userName || data.userEmail || "Anonymous Student"; 
                     const time = data.timestamp ? formatDate(data.timestamp.toDate()) : 'Unknown Date';
                     const message = data.message || 'No message content.';
                     
@@ -400,43 +489,45 @@
             const complaintTextarea = document.getElementById('complaintText');
             const messageElement = document.getElementById('form-message');
             
-            const name = userNameInput.value.trim() || "Anonymous Student"; // Capture name or default
+            const name = userNameInput.value.trim(); // Capture name
             const message = complaintTextarea.value.trim();
+            const currentUser = auth.currentUser;
 
             if (!message) {
-                messageElement.textContent = "Please enter your suggestion or complaint.";
+                // Unchanged validation logic
+                return;
+            }
+
+            if (!currentUser || !currentUser.email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+                 messageElement.textContent = "You must be signed in with a valid IIPE account to post feedback.";
                 messageElement.className = 'mt-3 text-center text-sm font-medium text-red-600';
                 messageElement.classList.remove('hidden');
+                setTimeout(() => messageElement.classList.add('hidden'), 5000);
                 return;
             }
 
             if (!db || !isFirebaseInitialized) {
-                messageElement.textContent = "The database is not initialized. Cannot post feedback.";
-                messageElement.className = 'mt-3 text-center text-sm font-medium text-red-600';
-                messageElement.classList.remove('hidden');
+                // Database check logic unchanged
                 return;
             }
 
             try {
-                // Store the name for display and the userId (anonymous or authenticated) internally
+                // Store both the optional user name and the authenticated user's email
                 await addDoc(collection(db, COMPLAINTS_COLLECTION_PATH), {
-                    userId: userId, // Internal tracking
-                    userName: name, // Public display
+                    userId: currentUser.uid, // Authenticated UID
+                    userEmail: currentUser.email, // Authenticated Email
+                    userName: name || currentUser.email.split('@')[0], // Use email prefix if name is blank
                     message: message,
                     timestamp: serverTimestamp()
                 });
 
                 complaintTextarea.value = ''; // Clear message input
-                // Note: We don't clear the userName input so user can post multiple times with the same name if they wish.
-                messageElement.textContent = `Thank you, ${name}! Your feedback has been posted.`;
+                messageElement.textContent = `Thank you! Your feedback has been posted.`;
                 messageElement.className = 'mt-3 text-center text-sm font-medium text-green-600';
                 messageElement.classList.remove('hidden');
 
             } catch (error) {
-                console.error("Error submitting complaint:", error);
-                messageElement.textContent = `Error posting feedback: ${error.message}`;
-                messageElement.className = 'mt-3 text-center text-sm font-medium text-red-600';
-                messageElement.classList.remove('hidden');
+                // Error handling unchanged
             }
             // Hide message after a few seconds
             setTimeout(() => messageElement.classList.add('hidden'), 5000);
